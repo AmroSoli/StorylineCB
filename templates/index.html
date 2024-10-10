@@ -1,0 +1,315 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CivilTrain Chatbot</title>
+    <!-- Link to the CSS file for styling -->
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='css/styles.css') }}">
+    <!-- Include Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+    <!-- Responsive meta tag -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Include marked.js for parsing markdown -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Include DOMPurify for sanitization -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.0/dist/purify.min.js"></script>
+</head>
+<body>
+    <!-- Chat Interface Container -->
+    <div class="chat-container">
+        <!-- Top Bar -->
+        <div class="top-bar">
+            <img src="{{ url_for('static', filename='images/CivilTrainLogo.png') }}" alt="Company Logo" class="logo">
+        </div>
+
+        <!-- Chat Messages Area -->
+        <div class="chat-messages" id="chat-messages">
+            <!-- Messages will be dynamically added here -->
+        </div>
+
+        <!-- Bottom Input Area -->
+        <div class="input-area">
+            <!-- Text Input Field -->
+            <input type="text" id="message-input" placeholder="Type your message here..." />
+
+            <!-- Icons -->
+            <div class="icons">
+                <!-- File Attachment Icon -->
+                <form id="upload-form" enctype="multipart/form-data">
+                    <label for="file-input" class="icon-button">
+                        <i class="fas fa-paperclip"></i>
+                    </label>
+                    <input type="file" id="file-input" name="file" accept=".pdf" style="display: none;" />
+                </form>
+                <!-- Send Button -->
+                <button class="send-button" onclick="sendMessage()"><i class="fas fa-paper-plane"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript code -->
+    <script>
+        let assistantTyping = false;
+        let typingIndicatorInterval;
+        let responseStagesTimeouts = [];
+        let assistantResponse = '';
+        let typingAnimationInterval;
+
+        // Function to send the user's message to the chatbot
+        function sendMessage() {
+            var messageInput = document.getElementById('message-input');
+            var message = messageInput.value.trim();
+            if (message === '') return; // Do nothing if the input is empty
+
+            // Display the user's message in the chat window
+            displayMessage('You', message);
+
+            // Clear the input field
+            messageInput.value = '';
+
+            // Display typing indicator
+            showTypingIndicator();
+
+            // Start the response stages
+            startResponseStages();
+
+            // Send the message to the /chat endpoint
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 'message': message }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.reply) {
+                    assistantResponse = data.reply;
+                    // Stop the response stages and start typing animation
+                    clearResponseStages();
+                    startTypingAnimation(assistantResponse);
+                } else if (data.error) {
+                    displayMessage('Error', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                clearResponseStages();
+                displayMessage('Error', 'An error occurred while processing your request.');
+            });
+        }
+
+        // Function to display a message in the chat window
+        function displayMessage(sender, message) {
+            var chatArea = document.getElementById('chat-messages');
+
+            // Create a message container
+            var messageContainer = document.createElement('div');
+            messageContainer.classList.add('message-container');
+
+            // Apply different classes based on the sender
+            if (sender === 'You') {
+                messageContainer.classList.add('outgoing');
+            } else {
+                messageContainer.classList.add('incoming');
+            }
+
+            // Create the message bubble
+            var messageBubble = document.createElement('div');
+            messageBubble.classList.add('message-bubble');
+
+            // Check if the message contains markdown
+            if (sender === 'Assistant') {
+                // Render the markdown as HTML and sanitize it
+                var rawHTML = marked.parse(message);
+                var cleanHTML = DOMPurify.sanitize(rawHTML);
+                messageBubble.innerHTML = cleanHTML;
+            } else if (sender === 'TypingIndicator') {
+                messageBubble.classList.add('typing-indicator');
+                messageBubble.innerHTML = message;
+            } else {
+                // Escape HTML for user messages
+                messageBubble.textContent = message;
+            }
+
+            // Append the message bubble to the container
+            messageContainer.appendChild(messageBubble);
+
+            // Append the message container to the chat area
+            chatArea.appendChild(messageContainer);
+
+            // Scroll to the bottom of the chat area
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // Function to show typing indicator
+        function showTypingIndicator() {
+            assistantTyping = true;
+            displayMessage('TypingIndicator', '<span class="dots"><span>.</span><span>.</span><span>.</span></span>');
+        }
+
+        // Function to start response stages
+        function startResponseStages() {
+            const totalResponseTime = 6000; // Total expected response time in milliseconds
+            const stageDurations = calculateStageDurations(totalResponseTime);
+
+            // Clear any existing timeouts
+            clearResponseStages();
+
+            // Stage 1: Gathering information...
+            responseStagesTimeouts.push(setTimeout(() => {
+                updateTypingIndicator('Gathering information...');
+            }, stageDurations.stage1));
+
+            // Stage 2: Formulating response...
+            responseStagesTimeouts.push(setTimeout(() => {
+                updateTypingIndicator('Formulating response...');
+            }, stageDurations.stage1 + stageDurations.stage2));
+
+            // Stage 3: Writing response...
+            responseStagesTimeouts.push(setTimeout(() => {
+                updateTypingIndicator('Writing response...');
+            }, stageDurations.stage1 + stageDurations.stage2 + stageDurations.stage3));
+        }
+
+        // Function to calculate stage durations based on total response time
+        function calculateStageDurations(totalTime) {
+            // Distribute total time among stages
+            const stage1 = totalTime * 0.33;
+            const stage2 = totalTime * 0.33;
+            const stage3 = totalTime * 0.34;
+            return { stage1, stage2, stage3 };
+        }
+
+        // Function to update typing indicator message
+        function updateTypingIndicator(message) {
+            const chatArea = document.getElementById('chat-messages');
+            const typingIndicators = chatArea.getElementsByClassName('typing-indicator');
+            if (typingIndicators.length > 0) {
+                typingIndicators[typingIndicators.length - 1].innerHTML = message;
+            }
+        }
+
+        // Function to clear response stages
+        function clearResponseStages() {
+            responseStagesTimeouts.forEach(timeout => clearTimeout(timeout));
+            responseStagesTimeouts = [];
+        }
+
+        // Function to start typing animation
+        function startTypingAnimation(text) {
+            // Remove typing indicator
+            removeTypingIndicator();
+
+            const chatArea = document.getElementById('chat-messages');
+
+            // Create a message container
+            var messageContainer = document.createElement('div');
+            messageContainer.classList.add('message-container', 'incoming');
+
+            // Create the message bubble
+            var messageBubble = document.createElement('div');
+            messageBubble.classList.add('message-bubble');
+
+            messageContainer.appendChild(messageBubble);
+            chatArea.appendChild(messageContainer);
+
+            // Scroll to the bottom
+            chatArea.scrollTop = chatArea.scrollHeight;
+
+            // Typing animation
+            let index = 0;
+            const typingSpeed = calculateTypingSpeed(text);
+
+            typingAnimationInterval = setInterval(() => {
+                if (index <= text.length) {
+                    let currentText = text.substring(0, index);
+                    // Render the markdown as HTML and sanitize it
+                    var rawHTML = marked.parse(currentText);
+                    var cleanHTML = DOMPurify.sanitize(rawHTML);
+                    messageBubble.innerHTML = cleanHTML;
+                    index++;
+                    chatArea.scrollTop = chatArea.scrollHeight;
+                } else {
+                    clearInterval(typingAnimationInterval);
+                }
+            }, typingSpeed);
+        }
+
+        // Function to calculate typing speed based on text length
+        function calculateTypingSpeed(text) {
+            const baseSpeed = 1; // Base typing speed in ms
+            const maxSpeed = 2;  // Maximum typing speed
+            const minSpeed = 0.2;  // Minimum typing speed
+            let speed = baseSpeed;
+
+            if (text.length > 1000) {
+                speed = maxSpeed;
+            } else if (text.length < 200) {
+                speed = minSpeed;
+            } else {
+                speed = baseSpeed;
+            }
+
+            return speed;
+        }
+
+        // Function to remove typing indicator
+        function removeTypingIndicator() {
+            const chatArea = document.getElementById('chat-messages');
+            const typingIndicators = chatArea.getElementsByClassName('typing-indicator');
+            if (typingIndicators.length > 0) {
+                typingIndicators[typingIndicators.length - 1].parentElement.remove();
+            }
+        }
+
+        // Send message when the user presses Enter
+        document.addEventListener('DOMContentLoaded', function() {
+            var messageInput = document.getElementById('message-input');
+
+            // Initial greeting message
+            var initialGreeting = "Hello, I'm **CivilTutor**! I'm here to help you learn more effectively. Feel free to ask me anything, and I'll be happy to assist you by chatting directly.\n\n**Quick Tip:** If you'd like more options, hover over any of my messages and you'll see three dots appear. Clicking on them gives you these choices:\n\n- **Reply**: Respond directly to that message for follow-up questions.\n- **Quiz**: Test your knowledge with an auto-generated quiz based on what you’ve just learned.\n- **Simplify**: If my explanation seems too complex, click this to get a simplified explanation.\n\nYou can use these features or just chat with me directly, whichever works best for you!";
+
+            // Display the initial greeting
+            displayMessage('Assistant', initialGreeting);
+
+            messageInput.addEventListener('keypress', function(event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    sendMessage();
+                }
+            });
+        });
+
+        // Handle file upload
+        document.getElementById('file-input').addEventListener('change', function(event) {
+            var file = event.target.files[0];
+
+            if (file) {
+                if (file.type === 'application/pdf') {
+                    var formData = new FormData();
+                    formData.append('file', file);
+
+                    fetch('/upload_pdf', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            alert('PDF uploaded successfully.');
+                            // Optionally, update the course content or notify the assistant
+                        } else {
+                            alert('Error uploading PDF: ' + data.error);
+                        }
+                    })
+                    .catch(error => console.error('Error:', error));
+                } else {
+                    alert('Only PDF files are allowed.');
+                }
+            }
+        });
+    </script>
+</body>
+</html>

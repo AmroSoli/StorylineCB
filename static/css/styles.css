@@ -1,0 +1,196 @@
+/* static/css/styles.css */
+
+/* General Styles */
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #3F444B; /* Dark Gray background */
+}
+
+/* Chat Container */
+.chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh; /* Full viewport height */
+    max-width: 600px;
+    margin: 0 auto; /* Center the chat container */
+    border: 1px solid #f0f0f0;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+}
+
+/* Top Bar */
+.top-bar {
+    background-color: #2A2B2E; /* Darker Gray background */
+    padding: 15px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Logo */
+.top-bar .logo {
+    max-height: 50px; /* Adjust the logo size */
+    max-width: 100%;
+}
+
+/* Chat Messages Area */
+.chat-messages {
+    flex: 1; /* Take up available space */
+    padding: 10px;
+    overflow-y: auto; /* Enable vertical scrolling */
+    background-color: #3F444B; /* Dark Gray background */
+}
+
+.message-container {
+    display: flex;
+    margin-bottom: 10px;
+}
+
+.message-container.incoming {
+    justify-content: flex-start; /* Left-aligned */
+}
+
+.message-container.outgoing {
+    justify-content: flex-end; /* Right-aligned */
+}
+
+.message-bubble {
+    max-width: 70%;
+    padding: 10px 15px;
+    border-radius: 20px;
+    position: relative;
+    word-wrap: break-word;
+    overflow-wrap: anywhere; /* Allow text to break anywhere */
+}
+
+/* Styling for Assistant's Messages */
+.message-container.incoming .message-bubble {
+    background-color: #ffffff; /* White background */
+    color: #000000; /* Black text */
+    border: 1px solid #f0f0f0;
+}
+
+/* Styling for User's Messages */
+.message-container.outgoing .message-bubble {
+    background-color: #F55100; /* Orange bubble */
+    color: #ffffff; /* White text */
+}
+
+/* Styling for Markdown Elements in Assistant's Messages */
+.message-bubble h1,
+.message-bubble h2,
+.message-bubble h3 {
+    margin-top: 0;
+    color: #000000; /* Ensure headings are black */
+}
+
+.message-bubble ul {
+    padding-left: 20px;
+    color: #000000; /* Ensure list items are black */
+}
+
+.message-bubble strong {
+    color: #000000; /* Ensure bold text is black */
+}
+
+/* Typing Indicator */
+.typing-indicator {
+    background-color: #ffffff; /* White background */
+    color: #000000; /* Black text */
+    border: 1px solid #f0f0f0;
+    padding: 10px 15px;
+    border-radius: 20px;
+    max-width: 70%;
+}
+
+.typing-indicator .dots span {
+    animation: blink 1s infinite;
+    font-size: 24px;
+}
+
+.typing-indicator .dots span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.typing-indicator .dots span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes blink {
+    0% { opacity: 0; }
+    50% { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* Bottom Input Area */
+.input-area {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    background-color: #2A2B2E; /* Darker Gray background */
+    border-top: 1px solid #f0f0f0;
+}
+
+.input-area input[type="text"] {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid #f0f0f0;
+    border-radius: 20px;
+    outline: none;
+    font-size: 16px;
+}
+
+.input-area .icons {
+    display: flex;
+    align-items: center;
+    margin-left: 10px;
+}
+
+.icon-button {
+    background: none;
+    border: none;
+    color: #ffffff; /* White */
+    font-size: 20px;
+    margin-right: 10px;
+    cursor: pointer;
+}
+
+.icon-button:last-child {
+    margin-right: 0;
+}
+
+.send-button {
+    background-color: #F55100; /* Orange */
+    border: none;
+    color: #ffffff; /* White */
+    font-size: 20px;
+    padding: 10px;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.send-button i {
+    margin: 0;
+}
+
+/* Scrollbar Styles */
+.chat-messages::-webkit-scrollbar {
+    width: 6px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb {
+    background-color: #ccc;
+    border-radius: 3px;
+}
+
+.chat-messages::-webkit-scrollbar-track {
+    background-color: #f0f0f0;
+}
+
+/* Responsive Design */
+@media screen and (max-width: 600px) {
+    .chat-container {
+        max-width: 100%;
+    }
+}
