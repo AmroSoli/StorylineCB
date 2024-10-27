@@ -3,7 +3,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>CivilTrain Chatbot</title>
+    <title>CivilTutor Chatbot</title>
     <!-- Link to the CSS file for styling -->
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='css/styles.css') }}">
     <!-- Include Font Awesome for icons -->
@@ -28,6 +28,12 @@
             <!-- Messages will be dynamically added here -->
         </div>
 
+        <!-- Reply Context Bubble -->
+        <div class="reply-context" id="reply-context" style="display: none;">
+            <div class="reply-text" id="reply-text"></div>
+            <button class="close-reply" onclick="cancelReply()">&#10005;</button>
+        </div>
+
         <!-- Bottom Input Area -->
         <div class="input-area">
             <!-- Text Input Field -->
@@ -35,13 +41,6 @@
 
             <!-- Icons -->
             <div class="icons">
-                <!-- File Attachment Icon -->
-                <form id="upload-form" enctype="multipart/form-data">
-                    <label for="file-input" class="icon-button">
-                        <i class="fas fa-paperclip"></i>
-                    </label>
-                    <input type="file" id="file-input" name="file" accept=".pdf" style="display: none;" />
-                </form>
                 <!-- Send Button -->
                 <button class="send-button" onclick="sendMessage()"><i class="fas fa-paper-plane"></i></button>
             </div>
@@ -55,6 +54,8 @@
         let responseStagesTimeouts = [];
         let assistantResponse = '';
         let typingAnimationInterval;
+        let isReplying = false;
+        let replyToMessage = '';
 
         // Function to send the user's message to the chatbot
         function sendMessage() {
@@ -63,7 +64,13 @@
             if (message === '') return; // Do nothing if the input is empty
 
             // Display the user's message in the chat window
-            displayMessage('You', message);
+            if (isReplying) {
+                displayMessage('You', message, null, true, replyToMessage);
+                isReplying = false;
+                hideReplyContext();
+            } else {
+                displayMessage('You', message);
+            }
 
             // Clear the input field
             messageInput.value = '';
@@ -74,20 +81,29 @@
             // Start the response stages
             startResponseStages();
 
+            // Prepare the payload
+            let payload = {
+                'message': message,
+                'action': '',
+                'reply_to': ''
+            };
+
             // Send the message to the /chat endpoint
             fetch('/chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ 'message': message }),
+                body: JSON.stringify(payload),
             })
             .then(response => response.json())
             .then(data => {
+                clearResponseStages();
+                removeTypingIndicator();
+
                 if (data.reply) {
                     assistantResponse = data.reply;
-                    // Stop the response stages and start typing animation
-                    clearResponseStages();
+                    // Start typing animation
                     startTypingAnimation(assistantResponse);
                 } else if (data.error) {
                     displayMessage('Error', data.error);
@@ -96,12 +112,13 @@
             .catch(error => {
                 console.error('Error:', error);
                 clearResponseStages();
+                removeTypingIndicator();
                 displayMessage('Error', 'An error occurred while processing your request.');
             });
         }
 
         // Function to display a message in the chat window
-        function displayMessage(sender, message) {
+        function displayMessage(sender, message, messageId = null, isFinal = true, replyTo = null) {
             var chatArea = document.getElementById('chat-messages');
 
             // Create a message container
@@ -115,38 +132,142 @@
                 messageContainer.classList.add('incoming');
             }
 
-            // Create the message bubble
-            var messageBubble = document.createElement('div');
-            messageBubble.classList.add('message-bubble');
+            // For assistant messages, create an action wrapper
+            if (sender === 'Assistant' && isFinal) {
+                // Create the action wrapper
+                var actionWrapper = document.createElement('div');
+                actionWrapper.classList.add('action-wrapper');
 
-            // Check if the message contains markdown
-            if (sender === 'Assistant') {
+                // Create the message bubble
+                var messageBubble = document.createElement('div');
+                messageBubble.classList.add('message-bubble');
+
+                if (messageId) {
+                    messageBubble.setAttribute('data-message-id', messageId);
+                }
+
                 // Render the markdown as HTML and sanitize it
                 var rawHTML = marked.parse(message);
                 var cleanHTML = DOMPurify.sanitize(rawHTML);
                 messageBubble.innerHTML = cleanHTML;
-            } else if (sender === 'TypingIndicator') {
-                messageBubble.classList.add('typing-indicator');
-                messageBubble.innerHTML = message;
-            } else {
-                // Escape HTML for user messages
-                messageBubble.textContent = message;
-            }
 
-            // Append the message bubble to the container
-            messageContainer.appendChild(messageBubble);
+                // Apply color coding to correct and incorrect answers
+                var paragraphs = messageBubble.getElementsByTagName('p');
+                Array.from(paragraphs).forEach(function(elem) {
+                    if (elem.textContent.startsWith('Your answer is correct:')) {
+                        elem.classList.add('quiz-answer', 'correct');
+                    } else if (elem.textContent.startsWith('Your answer:')) {
+                        elem.classList.add('quiz-answer', 'incorrect');
+                    } else if (elem.textContent.startsWith('Correct answer:')) {
+                        elem.classList.add('quiz-answer', 'correct-answer');
+                    }
+                });
+
+                // Create the three-dot icon
+                var actionIcon = document.createElement('div');
+                actionIcon.classList.add('action-icon');
+                actionIcon.innerHTML = '<i class="fas fa-ellipsis-h"></i>';
+
+                // Create the action menu
+                var actionMenu = document.createElement('div');
+                actionMenu.classList.add('action-menu');
+                actionMenu.innerHTML = `
+                    <div class="action-menu-tail"></div>
+                    <div class="action-item" data-action="reply">Reply</div>
+                    <div class="action-item" data-action="quiz">Quiz</div>
+                    <div class="action-item" data-action="simplify">Simplify</div>
+                `;
+
+                // Append the action icon and menu to the action wrapper
+                actionWrapper.appendChild(actionIcon);
+                actionWrapper.appendChild(actionMenu);
+
+                // Create a wrapper for message bubble and action wrapper
+                var messageContentWrapper = document.createElement('div');
+                messageContentWrapper.classList.add('message-content-wrapper');
+                messageContentWrapper.appendChild(messageBubble);
+                messageContentWrapper.appendChild(actionWrapper);
+
+                // Append the content wrapper to the message container
+                messageContainer.appendChild(messageContentWrapper);
+
+                // Add event listeners for the action menu
+                addActionMenuEvents(actionIcon, actionMenu, messageBubble);
+            } else {
+                // For user messages or typing indicators, append the message bubble directly
+                var messageBubble = document.createElement('div');
+                messageBubble.classList.add('message-bubble');
+
+                if (messageId) {
+                    messageBubble.setAttribute('data-message-id', messageId);
+                }
+
+                if (sender === 'TypingIndicator') {
+                    messageBubble.classList.add('typing-indicator');
+                    messageBubble.innerHTML = message;
+                } else if (sender === 'Error') {
+                    var rawHTML = marked.parse(message);
+                    var cleanHTML = DOMPurify.sanitize(rawHTML);
+                    messageBubble.innerHTML = cleanHTML;
+                } else {
+                    if (replyTo) {
+                        var replyContext = document.createElement('div');
+                        replyContext.classList.add('reply-context-bubble');
+                        replyContext.textContent = replyTo.length > 100 ? replyTo.substring(0, 100) + '...' : replyTo;
+                        messageBubble.appendChild(replyContext);
+                    }
+                    messageBubble.textContent += message;
+                }
+
+                messageContainer.appendChild(messageBubble);
+            }
 
             // Append the message container to the chat area
             chatArea.appendChild(messageContainer);
 
-            // Scroll to the bottom of the chat area
+            // Scroll to bottom
             chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // Function to add event listeners for action menu
+        function addActionMenuEvents(actionIcon, actionMenu, messageBubble) {
+            // Show/hide menu on icon click
+            actionIcon.addEventListener('click', function(event) {
+                event.stopPropagation();
+                // Close any other open action menus
+                closeAllActionMenus();
+                // Position the action menu
+                actionMenu.classList.toggle('show');
+            });
+
+            // Hide menu when clicking outside
+            document.addEventListener('click', function() {
+                actionMenu.classList.remove('show');
+            });
+
+            // Handle action clicks
+            actionMenu.addEventListener('click', function(event) {
+                var action = event.target.getAttribute('data-action');
+                if (action) {
+                    var messageContent = messageBubble.innerText;
+                    handleAction(action, messageContent);
+                    actionMenu.classList.remove('show');
+                }
+            });
+        }
+
+        // Function to close all open action menus
+        function closeAllActionMenus() {
+            var actionMenus = document.querySelectorAll('.action-menu.show');
+            actionMenus.forEach(function(menu) {
+                menu.classList.remove('show');
+            });
         }
 
         // Function to show typing indicator
         function showTypingIndicator() {
             assistantTyping = true;
-            displayMessage('TypingIndicator', '<span class="dots"><span>.</span><span>.</span><span>.</span></span>');
+            displayMessage('TypingIndicator', '<span class="pulsing-text">Gathering information...</span>', null, false);
         }
 
         // Function to start response stages
@@ -157,29 +278,24 @@
             // Clear any existing timeouts
             clearResponseStages();
 
-            // Stage 1: Gathering information...
-            responseStagesTimeouts.push(setTimeout(() => {
-                updateTypingIndicator('Gathering information...');
-            }, stageDurations.stage1));
+            // Stage messages
+            const stages = ["Gathering information...", "Formulating response...", "Writing response..."];
+            let currentStage = 0;
 
-            // Stage 2: Formulating response...
-            responseStagesTimeouts.push(setTimeout(() => {
-                updateTypingIndicator('Formulating response...');
-            }, stageDurations.stage1 + stageDurations.stage2));
+            function updateStage() {
+                if (currentStage < stages.length) {
+                    updateTypingIndicator(`<span class="pulsing-text">${stages[currentStage]}</span>`);
+                    currentStage++;
+                    responseStagesTimeouts.push(setTimeout(updateStage, stageDurations));
+                }
+            }
 
-            // Stage 3: Writing response...
-            responseStagesTimeouts.push(setTimeout(() => {
-                updateTypingIndicator('Writing response...');
-            }, stageDurations.stage1 + stageDurations.stage2 + stageDurations.stage3));
+            updateStage(); // Start the first stage
         }
 
-        // Function to calculate stage durations based on total response time
+        // Function to calculate stage durations
         function calculateStageDurations(totalTime) {
-            // Distribute total time among stages
-            const stage1 = totalTime * 0.33;
-            const stage2 = totalTime * 0.33;
-            const stage3 = totalTime * 0.34;
-            return { stage1, stage2, stage3 };
+            return totalTime / 3;
         }
 
         // Function to update typing indicator message
@@ -197,6 +313,15 @@
             responseStagesTimeouts = [];
         }
 
+        // Function to remove typing indicator
+        function removeTypingIndicator() {
+            const chatArea = document.getElementById('chat-messages');
+            const typingIndicators = chatArea.getElementsByClassName('typing-indicator');
+            if (typingIndicators.length > 0) {
+                typingIndicators[typingIndicators.length - 1].parentElement.remove();
+            }
+        }
+
         // Function to start typing animation
         function startTypingAnimation(text) {
             // Remove typing indicator
@@ -208,15 +333,43 @@
             var messageContainer = document.createElement('div');
             messageContainer.classList.add('message-container', 'incoming');
 
+            // Create the action wrapper
+            var actionWrapper = document.createElement('div');
+            actionWrapper.classList.add('action-wrapper');
+
             // Create the message bubble
             var messageBubble = document.createElement('div');
             messageBubble.classList.add('message-bubble');
 
-            messageContainer.appendChild(messageBubble);
-            chatArea.appendChild(messageContainer);
+            // Create the three-dot icon
+            var actionIcon = document.createElement('div');
+            actionIcon.classList.add('action-icon');
+            actionIcon.innerHTML = '<i class="fas fa-ellipsis-h"></i>';
 
-            // Scroll to the bottom
-            chatArea.scrollTop = chatArea.scrollHeight;
+            // Create the action menu
+            var actionMenu = document.createElement('div');
+            actionMenu.classList.add('action-menu');
+            actionMenu.innerHTML = `
+                <div class="action-menu-tail"></div>
+                <div class="action-item" data-action="reply">Reply</div>
+                <div class="action-item" data-action="quiz">Quiz</div>
+                <div class="action-item" data-action="simplify">Simplify</div>
+            `;
+
+            // Append the action icon and menu to the action wrapper
+            actionWrapper.appendChild(actionIcon);
+            actionWrapper.appendChild(actionMenu);
+
+            // Create a wrapper for message bubble and action wrapper
+            var messageContentWrapper = document.createElement('div');
+            messageContentWrapper.classList.add('message-content-wrapper');
+            messageContentWrapper.appendChild(messageBubble);
+            messageContentWrapper.appendChild(actionWrapper);
+
+            // Append the content wrapper to the message container
+            messageContainer.appendChild(messageContentWrapper);
+
+            chatArea.appendChild(messageContainer);
 
             // Typing animation
             let index = 0;
@@ -230,18 +383,22 @@
                     var cleanHTML = DOMPurify.sanitize(rawHTML);
                     messageBubble.innerHTML = cleanHTML;
                     index++;
-                    chatArea.scrollTop = chatArea.scrollHeight;
                 } else {
                     clearInterval(typingAnimationInterval);
+                    // Add event listeners for the action menu after typing animation completes
+                    addActionMenuEvents(actionIcon, actionMenu, messageBubble);
                 }
             }, typingSpeed);
+
+            // Scroll to bottom
+            chatArea.scrollTop = chatArea.scrollHeight;
         }
 
         // Function to calculate typing speed based on text length
         function calculateTypingSpeed(text) {
             const baseSpeed = 1; // Base typing speed in ms
             const maxSpeed = 2;  // Maximum typing speed
-            const minSpeed = 0.2;  // Minimum typing speed
+            const minSpeed = 0.5;   // Minimum typing speed
             let speed = baseSpeed;
 
             if (text.length > 1000) {
@@ -255,13 +412,190 @@
             return speed;
         }
 
-        // Function to remove typing indicator
-        function removeTypingIndicator() {
-            const chatArea = document.getElementById('chat-messages');
-            const typingIndicators = chatArea.getElementsByClassName('typing-indicator');
-            if (typingIndicators.length > 0) {
-                typingIndicators[typingIndicators.length - 1].parentElement.remove();
+        // Function to handle actions
+        function handleAction(action, messageContent) {
+            if (action === 'simplify') {
+                sendActionRequest('simplify', messageContent);
+            } else if (action === 'quiz') {
+                sendActionRequest('quiz', messageContent);
+            } else if (action === 'reply') {
+                // Set the reply context
+                isReplying = true;
+                replyToMessage = messageContent;
+                showReplyContext(messageContent);
             }
+        }
+
+        // Function to send action request to the server
+        function sendActionRequest(action, messageContent) {
+            // Display typing indicator
+            showTypingIndicator();
+
+            // Start the response stages
+            startResponseStages();
+
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    'message': '',
+                    'action': action,
+                    'reply_to': messageContent
+                }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                clearResponseStages();
+                removeTypingIndicator();
+
+                if (data.status === 'success') {
+                    if (action === 'simplify' && data.reply) {
+                        assistantResponse = data.reply;
+                        // Start typing animation
+                        startTypingAnimation(assistantResponse);
+                    } else if (action === 'quiz' && data.quiz) {
+                        // Render the quiz
+                        renderQuiz(data.quiz);
+                    } else {
+                        displayMessage('Error', 'No data received from server.');
+                    }
+                } else if (data.status === 'error' && data.reply) {
+                    // Display error message from the assistant
+                    displayMessage('Assistant', data.reply);
+                } else {
+                    displayMessage('Error', 'An unexpected error occurred.');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                clearResponseStages();
+                removeTypingIndicator();
+                displayMessage('Error', 'An error occurred while processing your request.');
+            });
+        }
+
+        // Function to render the quiz
+        function renderQuiz(quiz) {
+            var chatArea = document.getElementById('chat-messages');
+
+            // Create a message container
+            var messageContainer = document.createElement('div');
+            messageContainer.classList.add('message-container', 'incoming');
+
+            // Create the quiz container
+            var quizContainer = document.createElement('div');
+            quizContainer.classList.add('quiz-container');
+
+            quiz.forEach((item, index) => {
+                // Create question element
+                var questionElem = document.createElement('div');
+                questionElem.classList.add('quiz-question');
+                questionElem.textContent = `${index + 1}. ${item.question}`;
+
+                // Create options container
+                var optionsContainer = document.createElement('div');
+                optionsContainer.classList.add('quiz-options');
+
+                item.options.forEach((option, optIndex) => {
+                    // Create option element
+                    var optionElem = document.createElement('div');
+                    optionElem.classList.add('quiz-option');
+                    optionElem.textContent = option;
+                    optionElem.dataset.questionIndex = index;
+                    optionElem.dataset.optionIndex = optIndex;
+
+                    // Add click event listener
+                    optionElem.addEventListener('click', function() {
+                        selectOption(this);
+                    });
+
+                    optionsContainer.appendChild(optionElem);
+                });
+
+                quizContainer.appendChild(questionElem);
+                quizContainer.appendChild(optionsContainer);
+            });
+
+            // Create submit button
+            var submitButton = document.createElement('button');
+            submitButton.classList.add('quiz-submit-button');
+            submitButton.textContent = 'Submit Quiz';
+            submitButton.addEventListener('click', function() {
+                submitQuiz(quiz);
+            });
+
+            quizContainer.appendChild(submitButton);
+
+            // Append quiz container to message container
+            messageContainer.appendChild(quizContainer);
+
+            // Append message container to chat area
+            chatArea.appendChild(messageContainer);
+
+            // Scroll to the bottom
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // Function to handle option selection
+        function selectOption(optionElem) {
+            var questionIndex = optionElem.dataset.questionIndex;
+            var options = document.querySelectorAll(`.quiz-option[data-question-index="${questionIndex}"]`);
+            options.forEach(opt => opt.classList.remove('selected'));
+            optionElem.classList.add('selected');
+        }
+
+        // Function to submit the quiz and display results
+        function submitQuiz(quiz) {
+            var selectedOptions = [];
+            quiz.forEach((item, index) => {
+                var selectedOptionElem = document.querySelector(`.quiz-option.selected[data-question-index="${index}"]`);
+                var selectedOptionText = selectedOptionElem ? selectedOptionElem.textContent : null;
+                selectedOptions.push({
+                    question: item.question,
+                    selected: selectedOptionText,
+                    correct: item.answer
+                });
+            });
+
+            // Build the results using Markdown formatting
+            var resultsMarkdown = '**Here are your quiz results:**\n\n';
+
+            selectedOptions.forEach((item, index) => {
+                if (item.selected === item.correct) {
+                    resultsMarkdown += `${index + 1}. ${item.question}\n`;
+                    resultsMarkdown += `Your answer is correct: **${item.selected}**\n\n`;
+                } else {
+                    resultsMarkdown += `${index + 1}. ${item.question}\n`;
+                    resultsMarkdown += `Your answer: **${item.selected || 'No answer selected'}**\n`;
+                    resultsMarkdown += `Correct answer: **${item.correct}**\n\n`;
+                }
+            });
+
+            // Display the results as a new assistant message
+            displayMessage('Assistant', resultsMarkdown);
+        }
+
+        // Function to show the reply context bubble
+        function showReplyContext(messageContent) {
+            var replyContext = document.getElementById('reply-context');
+            var replyText = document.getElementById('reply-text');
+            replyText.textContent = messageContent.length > 100 ? messageContent.substring(0, 100) + '...' : messageContent;
+            replyContext.style.display = 'flex';
+        }
+
+        // Function to hide the reply context bubble
+        function hideReplyContext() {
+            var replyContext = document.getElementById('reply-context');
+            replyContext.style.display = 'none';
+            replyToMessage = '';
+        }
+
+        // Function to cancel reply
+        function cancelReply() {
+            isReplying = false;
+            hideReplyContext();
         }
 
         // Send message when the user presses Enter
@@ -269,7 +603,7 @@
             var messageInput = document.getElementById('message-input');
 
             // Initial greeting message
-            var initialGreeting = "Hello, I'm **CivilTutor**! I'm here to help you learn more effectively. Feel free to ask me anything, and I'll be happy to assist you by chatting directly.\n\n**Quick Tip:** If you'd like more options, hover over any of my messages and you'll see three dots appear. Clicking on them gives you these choices:\n\n- **Reply**: Respond directly to that message for follow-up questions.\n- **Quiz**: Test your knowledge with an auto-generated quiz based on what you’ve just learned.\n- **Simplify**: If my explanation seems too complex, click this to get a simplified explanation.\n\nYou can use these features or just chat with me directly, whichever works best for you!";
+            var initialGreeting = "Hello, I'm **CivilTutor**! I'm here to help you learn more effectively. Feel free to ask me anything, and I'll be happy to assist you by chatting directly.\n\n**Quick Tip:** If you'd like more options, to the right-hand side of my messages you'll see three dots. Clicking on them gives you these choices:\n\n- **Reply**: Respond directly to a message for follow-up questions.\n- **Quiz**: Test your knowledge with an auto-generated quiz based on what you’ve just learned.\n- **Simplify**: If a message seems too complex, click this to get a simplified explanation.\n\nYou can use these features or just chat with me directly—whichever works best for you!";
 
             // Display the initial greeting
             displayMessage('Assistant', initialGreeting);
@@ -280,35 +614,6 @@
                     sendMessage();
                 }
             });
-        });
-
-        // Handle file upload
-        document.getElementById('file-input').addEventListener('change', function(event) {
-            var file = event.target.files[0];
-
-            if (file) {
-                if (file.type === 'application/pdf') {
-                    var formData = new FormData();
-                    formData.append('file', file);
-
-                    fetch('/upload_pdf', {
-                        method: 'POST',
-                        body: formData
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.status === 'success') {
-                            alert('PDF uploaded successfully.');
-                            // Optionally, update the course content or notify the assistant
-                        } else {
-                            alert('Error uploading PDF: ' + data.error);
-                        }
-                    })
-                    .catch(error => console.error('Error:', error));
-                } else {
-                    alert('Only PDF files are allowed.');
-                }
-            }
         });
     </script>
 </body>

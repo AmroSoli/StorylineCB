@@ -1,95 +1,39 @@
-# app.py
-# This is the main Python file for your chatbot application.
-
+# storylinechatbot.py
 import os
 import json
 import re
-import requests
+import numpy as np
+import openai
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
-from PyPDF2 import PdfReader
-from werkzeug.utils import secure_filename
+import tiktoken  # Make sure to install this package
 
 # Initialize the Flask application
 app = Flask(__name__)
-
-# Enable Cross-Origin Resource Sharing (CORS)
 CORS(app)
 
-# Allowed file extensions for uploads
-ALLOWED_EXTENSIONS = {'pdf'}
+# Set your OpenAI API key
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-# Initialize conversation history
+# Initialize conversation history and greeting flag
 conversation = []
+user_greeted = False  # Flag to track if the user has greeted before
 
-# Paths to the folders containing PDFs
-PDF_FOLDER_PATH = 'pdfs'            # Default PDFs folder
-UPLOADED_PDFS_PATH = 'uploaded_pdfs'  # Uploaded PDFs folder
+# Path to course embeddings
+COURSE_EMBEDDINGS_PATH = 'course_embeddings.json'
 
-# Ensure the 'uploaded_pdfs' directory exists
-if not os.path.exists(UPLOADED_PDFS_PATH):
-    os.makedirs(UPLOADED_PDFS_PATH)
-
-# Initialize course content
-course_content = ""
-
-# Define the chapters/modules
-chapters = [
-    "1. Introduction to Construction Workplace Health and Safety",
-    "2. Planning and Preparation",
-    "3. Hazard Identification and Control",
-    "4. Worksite Safety and Health",
-    "5. Safe Work Methods and Procedures"
-]
-
-def allowed_file(filename):
-    """
-    Checks if the uploaded file has an allowed extension.
-    """
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def extract_text_from_pdfs(folder_path):
-    """
-    Extracts text from all PDF files in the specified folder.
-    """
-    pdf_text = ""
-
-    # Check if the folder exists
-    if not os.path.exists(folder_path):
-        return pdf_text
-
-    # Iterate over all files in the folder
-    for filename in os.listdir(folder_path):
-        if filename.lower().endswith('.pdf'):
-            file_path = os.path.join(folder_path, filename)
-            with open(file_path, 'rb') as file:
-                reader = PdfReader(file)
-                # Extract text from each page
-                for page in reader.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        pdf_text += page_text + "\n"
-
-    return pdf_text
-
-def update_course_content():
-    """
-    Updates the global course content variable by extracting text from PDFs.
-    """
-    global course_content
-    # Extract text from PDFs in both 'pdfs' and 'uploaded_pdfs' folders
-    content_pdfs = extract_text_from_pdfs(PDF_FOLDER_PATH)
-    uploaded_pdfs = extract_text_from_pdfs(UPLOADED_PDFS_PATH)
-    course_content = content_pdfs + "\n" + uploaded_pdfs
-
-# Initialize course content
-update_course_content()
+# Load course embeddings
+with open(COURSE_EMBEDDINGS_PATH, 'r', encoding='utf-8') as f:
+    course_embeddings = json.load(f)
+    # Convert embeddings to numpy arrays
+    for e in course_embeddings:
+        e['embedding'] = np.array(e['embedding'], dtype='float32')
+print("Loaded course embeddings.")
 
 def detect_self_harm(message):
     """
     Detects if the message contains self-harm related content.
     """
-    # Define keywords related to self-harm
     self_harm_keywords = [
         r'\bkill myself\b',
         r'\bsuicide\b',
@@ -98,101 +42,94 @@ def detect_self_harm(message):
         r'\bhurt myself\b',
         # Add more keywords as needed
     ]
-    pattern = re.compile('|'.join(self_harm_keywords), re.IGNORECASE)
-    return bool(pattern.search(message))
+    self_harm_pattern = re.compile('|'.join(self_harm_keywords), re.IGNORECASE)
+    return bool(self_harm_pattern.search(message))
 
 def is_greeting(message):
     """
-    Detects if the user's message is a greeting.
+    Detects if the user's message is a greeting with no other content.
     """
     greetings = ['hello', 'hi', 'hey', 'greetings', 'hola', 'good morning', 'good afternoon', 'good evening']
-    # Create a regex pattern to match greetings as whole words, case-insensitive
-    pattern = r'\b(' + '|'.join(map(re.escape, greetings)) + r')\b'
-    return re.search(pattern, message, re.IGNORECASE) is not None
+    pattern_str = r'^\s*(' + '|'.join(map(re.escape, greetings)) + r')[\s!.,]*$'
+    greeting_pattern = re.compile(pattern_str, re.IGNORECASE)
+    return bool(greeting_pattern.match(message))
 
-def construct_input_prompt(conversation_history):
+def get_relevant_text_chunks(user_input, top_k=1):
     """
-    Constructs the input prompt for the Llama model based on the conversation history.
+    Given the user input, retrieve the most relevant text chunks from the course content.
     """
-    # System prompt including the course content and strict instructions
-    system_prompt = (
-        "You are a helpful assistant called CivilTutor for an e-learning course about construction safety. "
-        "Your role is to assist learners by answering questions strictly based on the course content provided below. "
-        "Do not use any external information or your own knowledge. "
-        "If the answer is not in the course content, politely inform the user that the information is not available in the course material. "
-        "When the user greets you during the conversation, respond appropriately, but do not repeat the initial greeting message. "
-        "After providing an explanation, include the following message in bold at the end: "
-        "'Would you like me to simplify this further? If so, type \"Simplify\" :)' "
-        "If the user types 'Simplify', then provide a simpler version of your last explanation. "
-        "Continue simplifying upon each 'Simplify' command until it can no longer be simplified. "
-        "Please provide clear, concise answers and format your responses using markdown for better readability. "
-        "Use headings, bold text, and bullet points where appropriate. "
-        "Do not include any content unrelated to the course content.\n\n"
-        "### Chapters:\n"
-        f"{chr(10).join(chapters)}\n\n"
-        "### Course Content:\n"
-        f"{course_content}\n\n"
+    # Generate embedding for the user input
+    response = openai.Embedding.create(
+        input=user_input,
+        model='text-embedding-ada-002'
     )
+    user_embedding = np.array(response['data'][0]['embedding'], dtype='float32')
 
-    # Build the conversation history into a single string
-    conversation_text = system_prompt
-    for msg in conversation_history:
-        role = msg['role'].capitalize()  # 'User' or 'Assistant'
-        content = msg['content']
-        conversation_text += f"{role}: {content}\n"
+    # Compute cosine similarity between the user embedding and each course embedding
+    similarities = []
+    for e in course_embeddings:
+        course_embedding = e['embedding']
+        similarity = np.dot(user_embedding, course_embedding) / (np.linalg.norm(user_embedding) * np.linalg.norm(course_embedding))
+        similarities.append(similarity)
 
-    # Add the assistant's prompt to indicate that the assistant should respond
-    conversation_text += "Assistant:"
+    # Get the indices of the top_k most similar text chunks
+    top_k_indices = np.argsort(similarities)[-top_k:][::-1]
 
-    return conversation_text
+    # Retrieve the corresponding text chunks
+    relevant_chunks = [course_embeddings[i]['text'] for i in top_k_indices]
+    return relevant_chunks
 
-def send_to_ollama(input_text):
+def truncate_text(text, max_tokens=800):
     """
-    Sends the input prompt to the Llama model API and retrieves the assistant's reply.
+    Truncate text to a maximum number of tokens.
     """
+    encoding = tiktoken.encoding_for_model('gpt-4')
+    tokens = encoding.encode(text)
+    if len(tokens) > max_tokens:
+        tokens = tokens[:max_tokens]
+        text = encoding.decode(tokens)
+    return text
+
+def num_tokens_from_messages(messages, model="gpt-4"):
+    """
+    Calculate the total number of tokens in the messages.
+    """
+    encoding = tiktoken.encoding_for_model(model)
+    num_tokens = 0
+    for message in messages:
+        content = message.get('content', '')
+        num_tokens += len(encoding.encode(content))
+    return num_tokens
+
+def send_to_openai(messages):
+    MAX_TOTAL_TOKENS = 8192
+    MAX_RESPONSE_TOKENS = 500
+    MAX_INPUT_TOKENS = MAX_TOTAL_TOKENS - MAX_RESPONSE_TOKENS
+
+    total_tokens = num_tokens_from_messages(messages)
+    if total_tokens > MAX_INPUT_TOKENS:
+        # Adjust MAX_RESPONSE_TOKENS to accommodate the input
+        MAX_RESPONSE_TOKENS = MAX_TOTAL_TOKENS - total_tokens
+        if MAX_RESPONSE_TOKENS < 200:
+            raise Exception("Input too long. Please reduce your message or the included context.")
+
     try:
-        # Make a POST request to the Ollama API with the input prompt
-        response = requests.post(
-            'http://localhost:11434/api/generate',  # API endpoint
-            headers={
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-            },
-            json={
-                "model": "llama3.2:latest",
-                "prompt": input_text,
-                "temperature": 0.7,
-                "max_tokens": 500,
-            },
-            stream=True
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=MAX_RESPONSE_TOKENS,
         )
-        # Raise an exception if the request was unsuccessful
-        response.raise_for_status()
-
-        # Initialize the assistant's reply
-        assistant_reply = ""
-
-        # Iterate over the streamed response lines
-        for line in response.iter_lines():
-            if line:
-                # Decode the line from bytes to string
-                line_str = line.decode('utf-8')
-                try:
-                    # Parse the JSON data from each line
-                    data = json.loads(line_str)
-                    # Append the 'response' field to the assistant's reply
-                    assistant_reply += data.get('response', '')
-                except json.JSONDecodeError:
-                    # Skip lines that are not valid JSON
-                    continue
-
-        # Return the assistant's reply, stripped of leading/trailing whitespace
-        return assistant_reply.strip()
-
-    except requests.exceptions.RequestException as e:
-        # Handle request exceptions
-        print(f"An error occurred while communicating with the API: {str(e)}")
-        return "I'm sorry, but I'm unable to respond at the moment."
+        assistant_reply = response['choices'][0]['message']['content'].strip()
+        return assistant_reply
+    except openai.error.OpenAIError as e:
+        error_message = f"OpenAI API Error: {str(e)}"
+        print(error_message)
+        raise e
+    except Exception as e:
+        error_message = f"Unexpected Error: {str(e)}"
+        print(error_message)
+        raise e
 
 @app.route('/')
 def index():
@@ -206,100 +143,118 @@ def chat():
     """
     Route for handling chat messages sent from the user.
     """
-    global conversation
+    global conversation, user_greeted
     try:
         # Get the user input
         data = request.get_json()
         user_input = data.get('message', '').strip()
+        action = data.get('action', '')
+        reply_to = data.get('reply_to', '').strip()
 
-        # Check for self-harm content
-        if detect_self_harm(user_input):
-            assistant_reply = (
-                "I'm sorry to hear that you're feeling this way. "
-                "Please consider reaching out to a mental health professional or a trusted person in your life. "
-                "In Australia, you can contact Lifeline at 13 11 14 for support."
-            )
-            return jsonify({'reply': assistant_reply})
+        # Handle actions: simplify, quiz, reply
+        if action:
+            # Handle simplify and quiz actions
+            if action == 'simplify':
+                if not reply_to:
+                    return jsonify({'status': 'error', 'reply': 'No content to simplify.'})
+                messages = [
+                    {"role": "system", "content": (
+                        "You are a helpful assistant that simplifies complex text for better understanding. "
+                        "Provide clear and concise explanations using only the course content provided."
+                    )},
+                    {"role": "system", "content": f"Course Content:\n\n{reply_to}"},
+                    {"role": "user", "content": "Please simplify the above content."}
+                ]
+                assistant_reply = send_to_openai(messages)
+                return jsonify({'status': 'success', 'reply': assistant_reply})
 
-        # Check if the user wants to simplify the last explanation
-        if user_input.lower() == 'simplify':
-            # Get the last assistant's message
-            last_assistant_message = ''
-            for msg in reversed(conversation):
-                if msg['role'] == 'assistant':
-                    last_assistant_message = msg['content']
-                    break
-            if last_assistant_message:
-                # Prepare prompt to simplify
-                simplify_prompt = (
-                    "Simplify the following explanation further into simpler terms. "
-                    "Continue simplifying until it can no longer be simplified. "
-                    "Only use the information provided.\n\n"
-                    f"Explanation:\n{last_assistant_message}"
+            elif action == 'quiz':
+                if not reply_to:
+                    return jsonify({'status': 'error', 'reply': 'No content to generate a quiz from.'})
+                # Generate a quiz based on the reply_to content
+                messages = [
+                    {"role": "system", "content": (
+                        "You are a helpful assistant that generates quizzes from provided content. "
+                        "When asked to generate a quiz, output only the JSON data without any additional text."
+                    )},
+                    {"role": "system", "content": f"Course Content:\n\n{reply_to}"},
+                    {"role": "user", "content": (
+                        "Create a short quiz with 3 multiple-choice questions based on the above content. "
+                        "Provide the quiz in JSON format as a list of questions, where each question is a dictionary "
+                        "with keys 'question', 'options', and 'answer'. Do not include any text outside of the JSON data."
+                    )}
+                ]
+                assistant_reply = send_to_openai(messages)
+
+                # Try to parse the assistant's reply as JSON
+                try:
+                    quiz_data = json.loads(assistant_reply)
+                    # Return the quiz data to the frontend
+                    return jsonify({'status': 'success', 'quiz': quiz_data})
+                except json.JSONDecodeError:
+                    # If parsing fails, return an error message
+                    return jsonify({'status': 'error', 'reply': 'Failed to generate quiz. Please try again.'})
+
+            elif action == 'reply':
+                # Handle reply action if needed
+                pass  # Currently, no special handling required
+
+        else:
+            # Regular message processing
+            # Check for self-harm content
+            if detect_self_harm(user_input):
+                assistant_reply = (
+                    "I'm sorry to hear that you're feeling this way. "
+                    "Please consider reaching out to a mental health professional or a trusted person in your life."
                 )
-                assistant_reply = send_to_ollama(simplify_prompt)
-                # Append the bolded message
-                assistant_reply += "\n\n**Would you like me to simplify this further? If so, type 'Simplify' :)**"
-                # Update conversation
+                return jsonify({'reply': assistant_reply})
+
+            # Handle greetings
+            if is_greeting(user_input):
+                if not user_greeted:
+                    assistant_reply = "Hello, how may I help? 😊"
+                    user_greeted = True
+                else:
+                    assistant_reply = "Hello, I'm still here. Do you have any questions? 😊"
                 conversation.append({"role": "user", "content": user_input})
                 conversation.append({"role": "assistant", "content": assistant_reply})
                 return jsonify({'reply': assistant_reply})
-            else:
-                assistant_reply = "I'm sorry, but I don't have anything to simplify."
-                return jsonify({'reply': assistant_reply})
 
-        # Handle greetings during the conversation
-        if is_greeting(user_input):
-            assistant_reply = "Hello, I'm still here. Do you have any questions?"
+            # Update conversation
             conversation.append({"role": "user", "content": user_input})
+
+            # Retrieve relevant text chunks
+            relevant_chunks = get_relevant_text_chunks(user_input, top_k=3)
+            # Truncate chunks
+            truncated_chunks = [truncate_text(chunk, max_tokens=800) for chunk in relevant_chunks]
+            # Combine the relevant chunks into a single string
+            context_text = "\n\n".join(truncated_chunks)
+
+            # Construct messages
+            messages = [
+                {"role": "system", "content": (
+                    "You are a helpful assistant called CivilTutor. "
+                    "Use the following course content to answer the user's questions. "
+                    "If the answer is not in the course content, politely inform the user that you can only provide information from the course. "
+                    "Do not provide any information beyond the course content."
+                )},
+                {"role": "system", "content": f"Course Content:\n\n{context_text}"},
+                {"role": "user", "content": user_input}
+            ]
+
+            # Send to OpenAI API
+            assistant_reply = send_to_openai(messages)
+
+            # Update conversation
             conversation.append({"role": "assistant", "content": assistant_reply})
+
+            # Return reply
             return jsonify({'reply': assistant_reply})
 
-        # Add user's message
-        conversation.append({"role": "user", "content": user_input})
-
-        # Construct prompt and get assistant's reply
-        input_prompt = construct_input_prompt(conversation)
-        assistant_reply = send_to_ollama(input_prompt)
-
-        # Append the bolded message if not already included
-        if "**Would you like me to simplify this further?" not in assistant_reply:
-            assistant_reply += "\n\n**Would you like me to simplify this further? If so, type 'Simplify' :)**"
-
-        # Update conversation
-        conversation.append({"role": "assistant", "content": assistant_reply})
-
-        # Return reply along with a success flag
-        return jsonify({'reply': assistant_reply, 'status': 'success'})
-
     except Exception as e:
-        return jsonify({'error': 'An error occurred: ' + str(e)}), 500
-
-@app.route('/upload_pdf', methods=['POST'])
-def upload_pdf():
-    """
-    Handles PDF file uploads from the user.
-    """
-    if 'file' not in request.files:
-        return jsonify({'status': 'error', 'error': 'No file part in the request.'})
-
-    file = request.files['file']
-
-    if file.filename == '':
-        return jsonify({'status': 'error', 'error': 'No selected file.'})
-
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        upload_folder = UPLOADED_PDFS_PATH
-        file_path = os.path.join(upload_folder, filename)
-        file.save(file_path)
-
-        # Update course content
-        update_course_content()
-
-        return jsonify({'status': 'success'})
-    else:
-        return jsonify({'status': 'error', 'error': 'Only PDF files are allowed.'})
+        error_message = f"An error occurred: {str(e)}"
+        print(error_message)
+        return jsonify({'reply': error_message}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
