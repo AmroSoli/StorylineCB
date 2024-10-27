@@ -4,9 +4,12 @@ import json
 import re
 import numpy as np
 import openai
+from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import tiktoken  # Make sure to install this package
+
+load_dotenv()  # Load environment variables from .env file
 
 # Initialize the Flask application
 app = Flask(__name__)
