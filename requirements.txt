@@ -1,5 +1,6 @@
-Flask==2.0.1
-flask-cors==3.0.10
-requests==2.26.0
-PyPDF2==2.12.1
-Werkzeug==2.0.1
+flask
+flask-cors
+openai
+numpy
+tiktoken
+python-dotenv  # If you're using dotenv for environment variables
