@@ -1,19 +1,18 @@
-# storylinechatbot.py
+# app.py
 import os
 import json
 import re
 import numpy as np
 import openai
-from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
-import tiktoken  # Make sure to install this package
+import tiktoken
 
 # Initialize the Flask application
 app = Flask(__name__)
 CORS(app)
 
-# Set your OpenAI API key
+# Securely load the OpenAI API key from an environment variable
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 # Initialize conversation history and greeting flag
@@ -55,7 +54,7 @@ def is_greeting(message):
     greeting_pattern = re.compile(pattern_str, re.IGNORECASE)
     return bool(greeting_pattern.match(message))
 
-def get_relevant_text_chunks(user_input, top_k=1):
+def get_relevant_text_chunks(user_input, top_k=3):
     """
     Given the user input, retrieve the most relevant text chunks from the course content.
     """
@@ -103,6 +102,9 @@ def num_tokens_from_messages(messages, model="gpt-4"):
     return num_tokens
 
 def send_to_openai(messages):
+    """
+    Sends the messages to OpenAI's GPT-4 API and retrieves the assistant's reply.
+    """
     MAX_TOTAL_TOKENS = 8192
     MAX_RESPONSE_TOKENS = 500
     MAX_INPUT_TOKENS = MAX_TOTAL_TOKENS - MAX_RESPONSE_TOKENS
@@ -115,22 +117,29 @@ def send_to_openai(messages):
             raise Exception("Input too long. Please reduce your message or the included context.")
 
     try:
+        # Call the OpenAI API
         response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=messages,
             temperature=0.2,
             max_tokens=MAX_RESPONSE_TOKENS,
         )
+
+        # Extract the assistant's reply
         assistant_reply = response['choices'][0]['message']['content'].strip()
+
         return assistant_reply
+
     except openai.error.OpenAIError as e:
+        # Handle exceptions
         error_message = f"OpenAI API Error: {str(e)}"
         print(error_message)
-        raise e
+        raise e  # Re-raise the exception to be caught in the /chat route
+
     except Exception as e:
         error_message = f"Unexpected Error: {str(e)}"
         print(error_message)
-        raise e
+        raise e  # Re-raise the exception
 
 @app.route('/')
 def index():
@@ -257,5 +266,5 @@ def chat():
         print(error_message)
         return jsonify({'reply': error_message}), 500
 
-#if __name__ == '__main__':
-#    app.run(debug=True)
+if __name__ == '__main__':
+    app.run(debug=True)

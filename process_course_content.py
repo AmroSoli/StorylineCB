@@ -22,6 +22,8 @@ def load_text_chunks():
                 text_chunks.append(text)
     return text_chunks
 
+# process_course_content.py
+
 def generate_embeddings(text_chunks):
     embeddings = []
     for text in text_chunks:

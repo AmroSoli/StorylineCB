@@ -1,6 +1,7 @@
+# requirements.txt
 flask
 flask-cors
-openai
+openai>=1.0.0
 numpy
 tiktoken
-python-dotenv  # If you're using dotenv for environment variables
+python-dotenv  # If you're using dotenv
