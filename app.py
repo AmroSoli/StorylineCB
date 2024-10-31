@@ -8,6 +8,7 @@ from openai import OpenAI
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import tiktoken
+import traceback
 
 # Initialize the Flask application
 app = Flask(__name__)
@@ -16,9 +17,6 @@ CORS(app)
 # Instantiate the OpenAI client
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-from dotenv import load_dotenv
-load_dotenv()
-
 # Initialize conversation history and greeting flag
 conversation = []
 user_greeted = False  # Flag to track if the user has greeted before
@@ -26,7 +24,7 @@ user_greeted = False  # Flag to track if the user has greeted before
 # Path to course embeddings
 COURSE_EMBEDDINGS_PATH = 'course_embeddings.json'
 
-# Load course embeddings
+# Load course embeddings at startup
 with open(COURSE_EMBEDDINGS_PATH, 'r', encoding='utf-8') as f:
     course_embeddings = json.load(f)
     # Convert embeddings to numpy arrays
@@ -62,15 +60,14 @@ def get_relevant_text_chunks(user_input, top_k=3):
     )
     user_embedding = np.array(response.data[0].embedding, dtype='float32')
 
-    # Compute cosine similarity between the user embedding and each course embedding
-    similarities = []
-    for e in course_embeddings:
-        course_embedding = e['embedding']
-        similarity = np.dot(user_embedding, course_embedding) / (np.linalg.norm(user_embedding) * np.linalg.norm(course_embedding))
-        similarities.append(similarity)
+    # Efficient similarity calculation
+    embeddings_matrix = np.array([e['embedding'] for e in course_embeddings])
+    similarities = np.dot(embeddings_matrix, user_embedding) / (
+        np.linalg.norm(embeddings_matrix, axis=1) * np.linalg.norm(user_embedding)
+    )
 
     # Get the indices of the top_k most similar text chunks
-    top_k_indices = np.argsort(similarities)[-top_k:][::-1]
+    top_k_indices = similarities.argsort()[-top_k:][::-1]
 
     # Retrieve the corresponding text chunks
     relevant_chunks = [course_embeddings[i]['text'] for i in top_k_indices]
@@ -80,14 +77,14 @@ def truncate_text(text, max_tokens=800):
     """
     Truncate text to a maximum number of tokens.
     """
-    encoding = tiktoken.encoding_for_model('gpt-4')
+    encoding = tiktoken.encoding_for_model('gpt-3.5-turbo')
     tokens = encoding.encode(text)
     if len(tokens) > max_tokens:
         tokens = tokens[:max_tokens]
         text = encoding.decode(tokens)
     return text
 
-def num_tokens_from_messages(messages, model="gpt-4"):
+def num_tokens_from_messages(messages, model="gpt-3.5-turbo"):
     """
     Calculate the total number of tokens in the messages.
     """
@@ -100,9 +97,9 @@ def num_tokens_from_messages(messages, model="gpt-4"):
 
 def send_to_openai(messages):
     """
-    Sends the messages to OpenAI's GPT-4 API and retrieves the assistant's reply.
+    Sends the messages to OpenAI's API and retrieves the assistant's reply.
     """
-    MAX_TOTAL_TOKENS = 8192
+    MAX_TOTAL_TOKENS = 4096  # For gpt-3.5-turbo
     MAX_RESPONSE_TOKENS = 500
     MAX_INPUT_TOKENS = MAX_TOTAL_TOKENS - MAX_RESPONSE_TOKENS
 
@@ -128,9 +125,21 @@ def send_to_openai(messages):
         return assistant_reply
 
     except Exception as e:
-        error_message = f"An error occurred: {str(e)}"
+        error_message = f"An error occurred in send_to_openai: {str(e)}"
+        traceback_str = traceback.format_exc()
         print(error_message)
+        print(traceback_str)
         raise e  # Re-raise the exception to be caught in the /chat route
+
+def extract_json(text):
+    """
+    Extracts JSON content from text.
+    """
+    json_match = re.search(r'\{.*\}|\[.*\]', text, re.DOTALL)
+    if json_match:
+        return json_match.group()
+    else:
+        return None
 
 @app.route('/')
 def index():
@@ -176,25 +185,35 @@ def chat():
                 messages = [
                     {"role": "system", "content": (
                         "You are a helpful assistant that generates quizzes from provided content. "
-                        "When asked to generate a quiz, output only the JSON data without any additional text."
+                        "When asked to generate a quiz, you should output only the JSON data and nothing else. "
+                        "Do not include any explanations, apologies, or additional text."
                     )},
                     {"role": "system", "content": f"Course Content:\n\n{reply_to}"},
                     {"role": "user", "content": (
-                        "Create a short quiz with 3 multiple-choice questions based on the above content. "
-                        "Provide the quiz in JSON format as a list of questions, where each question is a dictionary "
-                        "with keys 'question', 'options', and 'answer'. Do not include any text outside of the JSON data."
+                        "Create a short quiz with 2 multiple-choice questions based on the above content. "
+                        "Provide the quiz in strict JSON format as a list of questions. "
+                        "Each question should be a dictionary with the keys 'question', 'options', and 'answer'. "
+                        "Ensure that the JSON is valid and parsable. Do not include any text outside of the JSON data."
                     )}
                 ]
-                assistant_reply = send_to_openai(messages)
 
-                # Try to parse the assistant's reply as JSON
                 try:
-                    quiz_data = json.loads(assistant_reply)
-                    # Return the quiz data to the frontend
+                    assistant_reply = send_to_openai(messages)
+                    json_text = extract_json(assistant_reply)
+                    if not json_text:
+                        raise ValueError("No JSON content found in assistant's reply.")
+                    quiz_data = json.loads(json_text)
                     return jsonify({'status': 'success', 'quiz': quiz_data})
-                except json.JSONDecodeError:
-                    # If parsing fails, return an error message
+                except (json.JSONDecodeError, ValueError) as e:
+                    error_message = f"JSON parsing error: {str(e)}"
+                    print("Assistant's reply that caused parsing error:")
+                    print(assistant_reply)
+                    print(error_message)
                     return jsonify({'status': 'error', 'reply': 'Failed to generate quiz. Please try again.'})
+                except Exception as e:
+                    error_message = f"Unexpected error: {str(e)}"
+                    print(error_message)
+                    return jsonify({'status': 'error', 'reply': 'An error occurred while processing your request.'})
 
             elif action == 'reply':
                 # Handle reply action if needed
@@ -253,9 +272,11 @@ def chat():
             return jsonify({'reply': assistant_reply})
 
     except Exception as e:
-        error_message = f"An error occurred: {str(e)}"
+        error_message = f"An error occurred while processing your request: {str(e)}"
+        traceback_str = traceback.format_exc()
         print(error_message)
-        return jsonify({'reply': error_message}), 500
+        print(traceback_str)
+        return jsonify({'reply': 'An error occurred while processing your request.'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
