@@ -16,6 +16,9 @@ CORS(app)
 # Instantiate the OpenAI client
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # Initialize conversation history and greeting flag
 conversation = []
 user_greeted = False  # Flag to track if the user has greeted before
