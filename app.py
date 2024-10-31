@@ -1,9 +1,10 @@
 # app.py
+
 import os
 import json
 import re
 import numpy as np
-import openai
+from openai import OpenAI
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import tiktoken
@@ -12,8 +13,8 @@ import tiktoken
 app = Flask(__name__)
 CORS(app)
 
-# Securely load the OpenAI API key from an environment variable
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+# Instantiate the OpenAI client
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Initialize conversation history and greeting flag
 conversation = []
@@ -32,18 +33,11 @@ print("Loaded course embeddings.")
 
 def detect_self_harm(message):
     """
-    Detects if the message contains self-harm related content.
+    Placeholder function to detect self-harm related content.
+    Implement your self-harm detection logic here.
     """
-    self_harm_keywords = [
-        r'\bkill myself\b',
-        r'\bsuicide\b',
-        r'\bself[-\s]?harm\b',
-        r'\bend my life\b',
-        r'\bhurt myself\b',
-        # Add more keywords as needed
-    ]
-    self_harm_pattern = re.compile('|'.join(self_harm_keywords), re.IGNORECASE)
-    return bool(self_harm_pattern.search(message))
+    # Return True if self-harm content is detected, False otherwise
+    return False  # Replace with your implementation
 
 def is_greeting(message):
     """
@@ -59,11 +53,11 @@ def get_relevant_text_chunks(user_input, top_k=3):
     Given the user input, retrieve the most relevant text chunks from the course content.
     """
     # Generate embedding for the user input
-    response = openai.Embedding.create(
+    response = client.embeddings.create(
         input=user_input,
         model='text-embedding-ada-002'
     )
-    user_embedding = np.array(response['data'][0]['embedding'], dtype='float32')
+    user_embedding = np.array(response.data[0].embedding, dtype='float32')
 
     # Compute cosine similarity between the user embedding and each course embedding
     similarities = []
@@ -118,7 +112,7 @@ def send_to_openai(messages):
 
     try:
         # Call the OpenAI API
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=messages,
             temperature=0.2,
@@ -126,20 +120,14 @@ def send_to_openai(messages):
         )
 
         # Extract the assistant's reply
-        assistant_reply = response['choices'][0]['message']['content'].strip()
+        assistant_reply = response.choices[0].message.content.strip()
 
         return assistant_reply
 
-    except openai.error.OpenAIError as e:
-        # Handle exceptions
-        error_message = f"OpenAI API Error: {str(e)}"
+    except Exception as e:
+        error_message = f"An error occurred: {str(e)}"
         print(error_message)
         raise e  # Re-raise the exception to be caught in the /chat route
-
-    except Exception as e:
-        error_message = f"Unexpected Error: {str(e)}"
-        print(error_message)
-        raise e  # Re-raise the exception
 
 @app.route('/')
 def index():

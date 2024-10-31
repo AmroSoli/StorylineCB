@@ -1,6 +1,6 @@
 flask
 flask-cors
-openai>=1.52.2
+openai>=1.0.0
 numpy
 tiktoken
 python-dotenv
