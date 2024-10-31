@@ -95,19 +95,18 @@ def num_tokens_from_messages(messages, model="gpt-3.5-turbo"):
         num_tokens += len(encoding.encode(content))
     return num_tokens
 
-def send_to_openai(messages):
+def send_to_openai(messages, max_response_tokens=1000):
     """
     Sends the messages to OpenAI's API and retrieves the assistant's reply.
     """
     MAX_TOTAL_TOKENS = 4096  # For gpt-3.5-turbo
-    MAX_RESPONSE_TOKENS = 500
-    MAX_INPUT_TOKENS = MAX_TOTAL_TOKENS - MAX_RESPONSE_TOKENS
+    MAX_INPUT_TOKENS = MAX_TOTAL_TOKENS - max_response_tokens
 
     total_tokens = num_tokens_from_messages(messages)
     if total_tokens > MAX_INPUT_TOKENS:
-        # Adjust MAX_RESPONSE_TOKENS to accommodate the input
-        MAX_RESPONSE_TOKENS = MAX_TOTAL_TOKENS - total_tokens
-        if MAX_RESPONSE_TOKENS < 200:
+        # Adjust max_response_tokens to accommodate the input
+        max_response_tokens = MAX_TOTAL_TOKENS - total_tokens
+        if max_response_tokens < 200:
             raise Exception("Input too long. Please reduce your message or the included context.")
 
     try:
@@ -116,7 +115,7 @@ def send_to_openai(messages):
             model="gpt-3.5-turbo",
             messages=messages,
             temperature=0.2,
-            max_tokens=MAX_RESPONSE_TOKENS,
+            max_tokens=max_response_tokens,
         )
 
         # Extract the assistant's reply
@@ -190,7 +189,7 @@ def chat():
                     )},
                     {"role": "system", "content": f"Course Content:\n\n{reply_to}"},
                     {"role": "user", "content": (
-                        "Create a short quiz with 2 multiple-choice questions based on the above content. "
+                        "Create a short quiz with 5 multiple-choice questions based on the above content. "
                         "Provide the quiz in strict JSON format as a list of questions. "
                         "Each question should be a dictionary with the keys 'question', 'options', and 'answer'. "
                         "Ensure that the JSON is valid and parsable. Do not include any text outside of the JSON data."
@@ -198,7 +197,7 @@ def chat():
                 ]
 
                 try:
-                    assistant_reply = send_to_openai(messages)
+                    assistant_reply = send_to_openai(messages, max_response_tokens=1000)
                     json_text = extract_json(assistant_reply)
                     if not json_text:
                         raise ValueError("No JSON content found in assistant's reply.")
