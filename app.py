@@ -116,7 +116,7 @@ def send_to_openai(messages):
     try:
         # Call the OpenAI API
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-3.5-turbo",
             messages=messages,
             temperature=0.2,
             max_tokens=MAX_RESPONSE_TOKENS,
